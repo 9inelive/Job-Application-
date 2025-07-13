@@ -1,0 +1,572 @@
+{
+  "name": "Job Application Automation - Ready to Import",
+  "nodes": [
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "location",
+              "value": "Los Angeles, CA"
+            },
+            {
+              "name": "excludedTitles",
+              "value": "senior,manager,sales,director,lead,principal"
+            },
+            {
+              "name": "excludedKeywords", 
+              "value": "travel required,Java,C++,relocation,security clearance"
+            },
+            {
+              "name": "excludedCompanies",
+              "value": "Company A,Company B"
+            },
+            {
+              "name": "userName",
+              "value": "Your Name"
+            },
+            {
+              "name": "userEmail",
+              "value": "your.email@gmail.com"
+            },
+            {
+              "name": "userPhone",
+              "value": "+1-555-0123"
+            },
+            {
+              "name": "linkedinUrl",
+              "value": "https://linkedin.com/in/yourprofile"
+            }
+          ],
+          "boolean": [
+            {
+              "name": "enableAutoApply",
+              "value": false
+            },
+            {
+              "name": "enableNotifications",
+              "value": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "config-node",
+      "name": "📋 Configuration",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "⏰ Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [60, 300]
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "🔄 Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [60, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://remoteok.io/api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; n8n-job-bot)"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "remoteok-api",
+      "name": "🌐 RemoteOK Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [420, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://jobs.github.com/positions.json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "location",
+              "value": "={{$node['📋 Configuration'].json.location}}"
+            },
+            {
+              "name": "full_time",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "github-jobs",
+      "name": "🐙 GitHub Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://boards-api.greenhouse.io/v1/boards/{{$node['📋 Configuration'].json.location.replace(' ', '%20')}}/jobs",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "greenhouse-jobs",
+      "name": "🏢 Greenhouse Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [420, 400]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll"
+      },
+      "id": "merge-sources",
+      "name": "🔀 Merge Job Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [600, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize and clean job data from different sources\nconst items = [];\nconst config = $node['📋 Configuration'].json;\n\n// Helper function to clean text\nfunction cleanText(text) {\n  if (!text) return '';\n  return text.replace(/<[^>]*>/g, '').replace(/\\s+/g, ' ').trim();\n}\n\n// Helper function to extract domain from email\nfunction extractDomain(company) {\n  return company.toLowerCase()\n    .replace(/[^a-z0-9]/g, '')\n    .substring(0, 20);\n}\n\n$input.all().forEach((inputItem, sourceIndex) => {\n  const sourceData = inputItem.json;\n  let sourceName = '';\n  let jobs = [];\n  \n  // Identify source and extract jobs\n  if (sourceIndex === 0) { // RemoteOK\n    sourceName = 'RemoteOK';\n    jobs = Array.isArray(sourceData) ? sourceData.filter(job => job.id) : [];\n  } else if (sourceIndex === 1) { // GitHub Jobs\n    sourceName = 'GitHub';\n    jobs = Array.isArray(sourceData) ? sourceData : [];\n  } else if (sourceIndex === 2) { // Greenhouse\n    sourceName = 'Greenhouse';\n    jobs = sourceData.jobs || [];\n  }\n  \n  jobs.forEach(job => {\n    let normalizedJob = {\n      source: sourceName,\n      id: '',\n      title: '',\n      company: '',\n      location: config.location,\n      description: '',\n      url: '',\n      salary: '',\n      posted_date: new Date().toISOString(),\n      contact_email: ''\n    };\n    \n    // Normalize based on source\n    if (sourceName === 'RemoteOK') {\n      normalizedJob.id = `remoteok_${job.id}`;\n      normalizedJob.title = cleanText(job.position || '');\n      normalizedJob.company = cleanText(job.company || '');\n      normalizedJob.location = job.location || 'Remote';\n      normalizedJob.description = cleanText(job.description || '');\n      normalizedJob.url = job.url || `https://remoteok.io/remote-jobs/${job.id}`;\n      normalizedJob.salary = job.salary_min ? `$${job.salary_min}` : '';\n      normalizedJob.contact_email = `jobs@${extractDomain(normalizedJob.company)}.com`;\n    } else if (sourceName === 'GitHub') {\n      normalizedJob.id = `github_${job.id}`;\n      normalizedJob.title = cleanText(job.title || '');\n      normalizedJob.company = cleanText(job.company || '');\n      normalizedJob.location = job.location || config.location;\n      normalizedJob.description = cleanText(job.description || '');\n      normalizedJob.url = job.url || '';\n      normalizedJob.posted_date = job.created_at || new Date().toISOString();\n      normalizedJob.contact_email = `careers@${extractDomain(normalizedJob.company)}.com`;\n    } else if (sourceName === 'Greenhouse') {\n      normalizedJob.id = `greenhouse_${job.id}`;\n      normalizedJob.title = cleanText(job.title || '');\n      normalizedJob.company = cleanText(job.company?.name || '');\n      normalizedJob.location = job.location?.name || config.location;\n      normalizedJob.description = cleanText(job.content || '');\n      normalizedJob.url = job.absolute_url || '';\n      normalizedJob.posted_date = job.updated_at || new Date().toISOString();\n      normalizedJob.contact_email = `hr@${extractDomain(normalizedJob.company)}.com`;\n    }\n    \n    // Only add jobs with required fields\n    if (normalizedJob.title && normalizedJob.company) {\n      items.push({ json: normalizedJob });\n    }\n  });\n});\n\nreturn items;"
+      },
+      "id": "normalize-jobs",
+      "name": "🔄 Normalize Job Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [780, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Apply comprehensive filtering\nconst config = $node['📋 Configuration'].json;\nconst excludedTitles = config.excludedTitles.split(',').map(s => s.trim().toLowerCase());\nconst excludedKeywords = config.excludedKeywords.split(',').map(s => s.trim().toLowerCase());\nconst excludedCompanies = config.excludedCompanies.split(',').map(s => s.trim().toLowerCase());\n\nconst items = [];\n\n$input.all().forEach(item => {\n  const job = item.json;\n  let shouldExclude = false;\n  let exclusionReason = '';\n  \n  // Check title exclusions\n  const titleLower = job.title.toLowerCase();\n  for (const excludedTitle of excludedTitles) {\n    if (excludedTitle && titleLower.includes(excludedTitle)) {\n      shouldExclude = true;\n      exclusionReason = `Title contains: ${excludedTitle}`;\n      break;\n    }\n  }\n  \n  // Check description keyword exclusions\n  if (!shouldExclude) {\n    const descriptionLower = job.description.toLowerCase();\n    for (const excludedKeyword of excludedKeywords) {\n      if (excludedKeyword && descriptionLower.includes(excludedKeyword)) {\n        shouldExclude = true;\n        exclusionReason = `Description contains: ${excludedKeyword}`;\n        break;\n      }\n    }\n  }\n  \n  // Check company exclusions\n  if (!shouldExclude) {\n    const companyLower = job.company.toLowerCase();\n    for (const excludedCompany of excludedCompanies) {\n      if (excludedCompany && companyLower.includes(excludedCompany)) {\n        shouldExclude = true;\n        exclusionReason = `Company blacklisted: ${excludedCompany}`;\n        break;\n      }\n    }\n  }\n  \n  if (!shouldExclude) {\n    items.push({\n      json: {\n        ...job,\n        filterStatus: 'passed',\n        exclusionReason: null\n      }\n    });\n  } else {\n    // Optionally include excluded jobs for debugging\n    items.push({\n      json: {\n        ...job,\n        filterStatus: 'excluded',\n        exclusionReason\n      }\n    });\n  }\n});\n\nreturn items;"
+      },
+      "id": "filter-jobs",
+      "name": "🔍 Filter Jobs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.filterStatus}}",
+              "value2": "passed"
+            }
+          ]
+        }
+      },
+      "id": "filter-condition",
+      "name": "✅ Only Passed Jobs",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1140, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "requestMethod": "POST",
+        "url": "https://api.notion.com/v1/databases/YOUR_DATABASE_ID/query",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "filter",
+              "value": "={\"property\": \"Job ID\", \"rich_text\": {\"equals\": \"{{$json.id}}\"}}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "notion-check",
+      "name": "📝 Check Notion (Optional)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1320, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.results?.length || 0}}",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "new-job-check",
+      "name": "🆕 Is New Job?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1500, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate personalized application content\nconst config = $node['📋 Configuration'].json;\nconst job = $json;\n\n// Extract relevant keywords from job description\nconst techKeywords = ['javascript', 'python', 'react', 'node', 'vue', 'angular', 'aws', 'docker', 'kubernetes', 'sql', 'mongodb', 'git', 'api', 'rest', 'graphql'];\nconst foundTech = [];\n\nconst description = job.description.toLowerCase();\ntechKeywords.forEach(tech => {\n  if (description.includes(tech)) {\n    foundTech.push(tech.charAt(0).toUpperCase() + tech.slice(1));\n  }\n});\n\n// Generate personalized subject line\nconst subject = `Application for ${job.title} Position - ${config.userName}`;\n\n// Generate personalized email body\nconst techMention = foundTech.length > 0 \n  ? `I'm particularly excited about this role because of my experience with ${foundTech.slice(0, 3).join(', ')}.`\n  : 'I believe my technical background aligns well with your requirements.';\n\nconst emailBody = `Dear ${job.company} Hiring Team,\n\nI hope this email finds you well. I am writing to express my strong interest in the ${job.title} position at ${job.company}.\n\n${techMention}\n\nWith my proven track record in software development and passion for creating innovative solutions, I am confident I would be a valuable addition to your team. I am particularly drawn to ${job.company} because of its reputation in the industry.\n\nI would welcome the opportunity to discuss how my skills and enthusiasm can contribute to ${job.company}'s continued success. I am available for an interview at your convenience.\n\nThank you for considering my application. I look forward to hearing from you.\n\nBest regards,\n${config.userName}\n${config.userEmail}\n${config.userPhone}\n${config.linkedinUrl}`;\n\nreturn [{\n  json: {\n    ...job,\n    emailSubject: subject,\n    emailBody: emailBody,\n    foundTech: foundTech.join(', '),\n    applicationDate: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "personalize-application",
+      "name": "✏️ Personalize Application",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 300]
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "branches": [
+          {
+            "name": "Auto Apply"
+          },
+          {
+            "name": "Manual Review"
+          }
+        ],
+        "value": "={{$node['📋 Configuration'].json.enableAutoApply ? 'Auto Apply' : 'Manual Review'}}"
+      },
+      "id": "approval-switch",
+      "name": "🔀 Application Mode",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [1860, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "message",
+        "operation": "send",
+        "subject": "={{$json.emailSubject}}",
+        "message": "={{$json.emailBody}}",
+        "toRecipients": "={{$json.contact_email}}",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "📧 Send Application Email",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [2040, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "🎯 New job opportunity found!\\n*Title:* {{$json.title}}\\n*Company:* {{$json.company}}\\n*Location:* {{$json.location}}\\n*URL:* {{$json.url}}\\n*Tech Stack:* {{$json.foundTech}}\\n\\nReview and apply: {{$json.url}}"
+            },
+            {
+              "name": "username",
+              "value": "Job Hunter Bot"
+            },
+            {
+              "name": "icon_emoji",
+              "value": ":briefcase:"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "slack-notification",
+      "name": "📱 Slack Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2040, 400]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "requestMethod": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "parent",
+              "value": "={\"database_id\": \"YOUR_DATABASE_ID\"}"
+            },
+            {
+              "name": "properties",
+              "value": "={\"Job ID\": {\"rich_text\": [{\"text\": {\"content\": \"{{$json.id}}\"}}]}, \"Title\": {\"title\": [{\"text\": {\"content\": \"{{$json.title}}\"}}]}, \"Company\": {\"rich_text\": [{\"text\": {\"content\": \"{{$json.company}}\"}}]}, \"Location\": {\"rich_text\": [{\"text\": {\"content\": \"{{$json.location}}\"}}]}, \"URL\": {\"url\": \"{{$json.url}}\"}, \"Source\": {\"select\": {\"name\": \"{{$json.source}}\"}}, \"Status\": {\"select\": {\"name\": \"Found\"}}, \"Tech Stack\": {\"rich_text\": [{\"text\": {\"content\": \"{{$json.foundTech}}\"}}]}}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "notion-create",
+      "name": "📝 Log to Notion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2220, 400]
+    }
+  ],
+  "connections": {
+    "⏰ Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "📋 Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔄 Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "📋 Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📋 Configuration": {
+      "main": [
+        [
+          {
+            "node": "🌐 RemoteOK Jobs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "🐙 GitHub Jobs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "🏢 Greenhouse Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🌐 RemoteOK Jobs": {
+      "main": [
+        [
+          {
+            "node": "🔀 Merge Job Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🐙 GitHub Jobs": {
+      "main": [
+        [
+          {
+            "node": "🔀 Merge Job Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "🏢 Greenhouse Jobs": {
+      "main": [
+        [
+          {
+          "node": "🔀 Merge Job Sources",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "🔀 Merge Job Sources": {
+      "main": [
+        [
+          {
+            "node": "🔄 Normalize Job Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔄 Normalize Job Data": {
+      "main": [
+        [
+          {
+            "node": "🔍 Filter Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔍 Filter Jobs": {
+      "main": [
+        [
+          {
+            "node": "✅ Only Passed Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "✅ Only Passed Jobs": {
+      "true": [
+        [
+          {
+            "node": "📝 Check Notion (Optional)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📝 Check Notion (Optional)": {
+      "main": [
+        [
+          {
+            "node": "🆕 Is New Job?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🆕 Is New Job?": {
+      "true": [
+        [
+          {
+            "node": "✏️ Personalize Application",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "✏️ Personalize Application": {
+      "main": [
+        [
+          {
+            "node": "🔀 Application Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔀 Application Mode": {
+      "Auto Apply": [
+        [
+          {
+            "node": "📧 Send Application Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "Manual Review": [
+        [
+          {
+            "node": "📱 Slack Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📱 Slack Notification": {
+      "main": [
+        [
+          {
+            "node": "📝 Log to Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["automation", "jobs", "applications"],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-20T12:00:00.000Z",
+  "versionId": "2"
+}
